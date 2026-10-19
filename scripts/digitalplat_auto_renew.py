@@ -312,6 +312,8 @@ def load_fixture(path: Path) -> list[dict[str, Any]]:
 def should_renew(record: DomainRecord, renew_before_days: int) -> bool:
     if record.can_renew is False:
         return False
+    if str(record.raw.get("lifecycle_type")).strip().lower() == "permanent":
+        return False
     return record.days_remaining <= renew_before_days
 
 
@@ -447,11 +449,15 @@ def main() -> int:
             continue
 
         domain_id = pick_first(raw, ("id", "domain_id", "registered_domain_id"))
-        print(f"[DEBUG] {domain} raw={json.dumps(raw, ensure_ascii=False)}")
         print(
-            f"[CHECK] {record.name} (id={domain_id}) expiry_date={record.expiry_date.strftime(DATE_FORMAT)} "
+            f"[CHECK] {record.name} expiry_date={record.expiry_date.strftime(DATE_FORMAT)} "
             f"days_remaining={record.days_remaining} status={record.status or '-'}"
         )
+
+        if str(record.raw.get("lifecycle_type")).strip().lower() == "permanent":
+            print(f"[SKIP] {record.name} is permanent (lifecycle_type=permanent), renewal is not required.")
+            state_changed = update_state_for_record(state, record, "permanent", renew_before_days) or state_changed
+            continue
 
         if not should_renew(record, renew_before_days):
             print(f"[SKIP] {record.name} has not entered the renewal window ({record.days_remaining} days left, window is {renew_before_days} days).")
@@ -469,6 +475,10 @@ def main() -> int:
         try:
             renewed_raw = client.renew_domain(record.name, renewal_type, renewal_years, domain_id=domain_id)
         except Exception as exc:
+            if "registered_domain_not_found" in str(exc):
+                print(f"[SKIP] {record.name}: domain does not require/support renewal API (registered_domain_not_found).")
+                state_changed = update_state_for_record(state, record, "not_applicable", renew_before_days) or state_changed
+                continue
             errors.append(f"{record.name}: renewal request failed: {exc}")
             state_changed = update_state_for_record(state, record, "renew_failed", renew_before_days) or state_changed
             continue

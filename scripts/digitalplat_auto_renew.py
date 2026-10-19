@@ -95,17 +95,28 @@ class DigitalPlatClient:
             raise RuntimeError(f"DigitalPlat domain detail response is missing domain: {data}")
         return record
 
-    def renew_domain(self, domain: str, renewal_type: str, years: int) -> Any:
-        encoded = urllib.parse.quote(domain, safe="")
-        # DigitalPlat API requires Idempotency-Key header for POST /renew
+    def renew_domain(self, domain: str, renewal_type: str, years: int, domain_id: Any = None) -> Any:
+        encoded = urllib.parse.quote(str(domain), safe="")
         headers = {"Idempotency-Key": str(uuid.uuid4())}
-        data = self._request(
-            f"/domains/{encoded}/renew",
-            method="POST",
-            payload={"renewal_type": renewal_type, "years": years},
-            extra_headers=headers,
-        )
-        return unwrap_response(data)
+        payload = {"renewal_type": renewal_type, "years": years}
+        try:
+            return unwrap_response(self._request(
+                f"/domains/{encoded}/renew",
+                method="POST",
+                payload=payload,
+                extra_headers=headers,
+            ))
+        except RuntimeError as exc:
+            if "registered_domain_not_found" in str(exc) and domain_id:
+                print(f"[DEBUG] /domains/{encoded}/renew returned 404, retrying with id={domain_id}...")
+                headers["Idempotency-Key"] = str(uuid.uuid4())
+                return unwrap_response(self._request(
+                    f"/domains/{domain_id}/renew",
+                    method="POST",
+                    payload=payload,
+                    extra_headers=headers,
+                ))
+            raise
 
 
 def parse_args() -> argparse.Namespace:
@@ -435,8 +446,9 @@ def main() -> int:
             errors.append(f"{domain}: failed to parse domain record: {exc}")
             continue
 
+        domain_id = pick_first(raw, ("id", "domain_id", "registered_domain_id"))
         print(
-            f"[CHECK] {record.name} expiry_date={record.expiry_date.strftime(DATE_FORMAT)} "
+            f"[CHECK] {record.name} (id={domain_id}) expiry_date={record.expiry_date.strftime(DATE_FORMAT)} "
             f"days_remaining={record.days_remaining} status={record.status or '-'}"
         )
 
@@ -454,7 +466,7 @@ def main() -> int:
             continue
 
         try:
-            renewed_raw = client.renew_domain(record.name, renewal_type, renewal_years)
+            renewed_raw = client.renew_domain(record.name, renewal_type, renewal_years, domain_id=domain_id)
         except Exception as exc:
             errors.append(f"{record.name}: renewal request failed: {exc}")
             state_changed = update_state_for_record(state, record, "renew_failed", renew_before_days) or state_changed

@@ -447,6 +447,7 @@ def main() -> int:
             continue
 
         domain_id = pick_first(raw, ("id", "domain_id", "registered_domain_id"))
+        print(f"[DEBUG] {domain} raw={json.dumps(raw, ensure_ascii=False)}")
         print(
             f"[CHECK] {record.name} (id={domain_id}) expiry_date={record.expiry_date.strftime(DATE_FORMAT)} "
             f"days_remaining={record.days_remaining} status={record.status or '-'}"

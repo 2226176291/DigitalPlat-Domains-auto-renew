@@ -5,7 +5,7 @@ import os
 import sys
 import urllib.error
 import urllib.parse
-import urllib.request
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,12 +46,16 @@ class DigitalPlatClient:
         path: str,
         method: str = "GET",
         payload: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> Any:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
+        req_headers = dict(self.headers)
+        if extra_headers:
+            req_headers.update(extra_headers)
         request = urllib.request.Request(
             f"{self.api_base}{path}",
             data=body,
-            headers=self.headers,
+            headers=req_headers,
             method=method,
         )
         try:
@@ -92,10 +96,13 @@ class DigitalPlatClient:
 
     def renew_domain(self, domain: str, renewal_type: str, years: int) -> Any:
         encoded = urllib.parse.quote(domain, safe="")
+        # DigitalPlat API requires Idempotency-Key header for POST /renew
+        headers = {"Idempotency-Key": str(uuid.uuid4())}
         data = self._request(
             f"/domains/{encoded}/renew",
             method="POST",
             payload={"renewal_type": renewal_type, "years": years},
+            extra_headers=headers,
         )
         return unwrap_response(data)
 

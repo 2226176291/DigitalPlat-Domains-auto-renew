@@ -129,6 +129,19 @@ class TestDigitalPlatAutoRenew(unittest.TestCase):
         # List response
         self.assertEqual(unwrap_response([{"name": "test"}]), [{"name": "test"}])
 
+    def test_renew_domain_idempotency_key(self):
+        from unittest.mock import patch
+        from scripts.digitalplat_auto_renew import DigitalPlatClient
+
+        client = DigitalPlatClient("token123", "https://api.example.com")
+        with patch.object(client, "_request", return_value={"success": True}) as mock_req:
+            res = client.renew_domain("test.dpdns.org", "free", 1)
+            mock_req.assert_called_once()
+            _, kwargs = mock_req.call_args
+            self.assertIn("extra_headers", kwargs)
+            self.assertIn("Idempotency-Key", kwargs["extra_headers"])
+            self.assertTrue(len(kwargs["extra_headers"]["Idempotency-Key"]) > 10)
+
 
 if __name__ == "__main__":
     unittest.main()

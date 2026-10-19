@@ -50,24 +50,16 @@
 
 * `Settings -> Secrets and variables -> Actions`
 
-添加 Secret：
+添加 Secret（**必填**）：
 
-* `DIGITALPLAT_API_TOKEN`
+* `DIGITALPLAT_API_TOKEN`：填入第 0 步获取的 DigitalPlat API Key（通常以 `dp_live_` 开头）。
 
-添加 Variable：
+添加 Variable（**可选**）：
 
-* `DIGITALPLAT_DOMAINS`
+* `DIGITALPLAT_DOMAINS`：指定需要续期的域名（一行一个，或以逗号/分号分隔）。
+  > **💡 提示**：**若不配置此变量，脚本将自动读取并续期你账户下的所有域名！** 只有当你只想自动续期其中部分特定域名时才需配置。
 
-`DIGITALPLAT_DOMAINS` 一行一个域名：
-
-```text
-example.dpdns.org
-example.qzz.io
-```
-
-可选 Variable：
-
-* `DIGITALPLAT_RENEW_BEFORE_DAYS`：默认 `120`
+* `DIGITALPLAT_RENEW_BEFORE_DAYS`：到期前多少天开始续期，默认 `120` 天。
 
 ### 第 3 步：手动运行一次
 

@@ -50,24 +50,16 @@ Navigate to:
 
 - `Settings -> Secrets and variables -> Actions`
 
-Add a Secret:
+Add a Secret (**Required**):
 
-- `DIGITALPLAT_API_TOKEN`
+- `DIGITALPLAT_API_TOKEN`: Enter your DigitalPlat API Key created in Step 0 (typically starting with `dp_live_`).
 
-Add a Variable:
+Add a Variable (**Optional**):
 
-- `DIGITALPLAT_DOMAINS`
+- `DIGITALPLAT_DOMAINS`: Specific domains to check and renew (one per line, or comma/semicolon separated).
+  > **💡 Tip**: **If this variable is not set, the script will automatically discover and renew all domains under your account!** You only need to set this if you want to restrict renewals to specific domains.
 
-`DIGITALPLAT_DOMAINS` — one domain per line:
-
-```text
-example.dpdns.org
-example.qzz.io
-```
-
-Optional Variable:
-
-- `DIGITALPLAT_RENEW_BEFORE_DAYS`: default `120`
+- `DIGITALPLAT_RENEW_BEFORE_DAYS`: Days before expiration to trigger renewal, default is `120`.
 
 ### Step 3: Run Once Manually
 

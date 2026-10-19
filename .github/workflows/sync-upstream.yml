@@ -43,7 +43,7 @@ jobs:
       - name: Replace local template files with upstream versions
         if: steps.guard.outputs.skip != 'true'
         run: |
-          git checkout upstream/main -- scripts/ README.md .github/workflows/digitalplat-auto-renew.yml
+          git checkout upstream/main -- scripts/ tests/ README.md README.en.md .github/workflows/digitalplat-auto-renew.yml .github/workflows/sync-upstream.yml
 
       - name: Commit and push if changed
         if: steps.guard.outputs.skip != 'true'
@@ -52,6 +52,6 @@ jobs:
             echo "Template files already match upstream, nothing to commit."
             exit 0
           fi
-          git add scripts/ README.md .github/workflows/digitalplat-auto-renew.yml
+          git add scripts/ tests/ README.md README.en.md .github/workflows/digitalplat-auto-renew.yml .github/workflows/sync-upstream.yml
           git commit -m "chore(template): sync upstream from OUBIGFA/DigitalPlat-Domains-auto-renew [auto]"
           git push

@@ -38,7 +38,7 @@ class DigitalPlatClient:
             "Authorization": f"Bearer {api_token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "User-Agent": "digitalplat-auto-renew/1.0",
+            "User-Agent": "digitalplat-auto-renew/1.1",
         }
 
     def _request(
@@ -46,7 +46,7 @@ class DigitalPlatClient:
         path: str,
         method: str = "GET",
         payload: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             f"{self.api_base}{path}",
@@ -69,8 +69,8 @@ class DigitalPlatClient:
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"DigitalPlat returned non-JSON response: {text[:200]}") from exc
-        if not isinstance(parsed, dict):
-            raise RuntimeError(f"DigitalPlat returned unexpected response: {parsed}")
+        if not isinstance(parsed, (dict, list)):
+            raise RuntimeError(f"DigitalPlat returned unexpected response type: {type(parsed)}")
         return parsed
 
     def list_domains(self) -> list[dict[str, Any]]:
@@ -90,18 +90,14 @@ class DigitalPlatClient:
             raise RuntimeError(f"DigitalPlat domain detail response is missing domain: {data}")
         return record
 
-    def renew_domain(self, domain: str, renewal_type: str, years: int) -> dict[str, Any]:
+    def renew_domain(self, domain: str, renewal_type: str, years: int) -> Any:
         encoded = urllib.parse.quote(domain, safe="")
         data = self._request(
             f"/domains/{encoded}/renew",
             method="POST",
             payload={"renewal_type": renewal_type, "years": years},
         )
-        payload = unwrap_response(data)
-        record = payload.get("domain", payload) if isinstance(payload, dict) else None
-        if not isinstance(record, dict):
-            raise RuntimeError(f"DigitalPlat renewal response is unexpected: {data}")
-        return record
+        return unwrap_response(data)
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,12 +108,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def unwrap_response(data: dict[str, Any]) -> Any:
-    if "success" in data and data.get("success") is False:
-        message = data.get("error") or data.get("message") or data
-        raise RuntimeError(f"DigitalPlat API returned an error: {message}")
-    if "data" in data:
-        return data["data"]
+def unwrap_response(data: Any) -> Any:
+    if isinstance(data, dict):
+        if "success" in data and data.get("success") is False:
+            message = data.get("error") or data.get("message") or data
+            raise RuntimeError(f"DigitalPlat API returned an error: {message}")
+        if data.get("status") == "error":
+            message = data.get("message") or data.get("error") or data
+            raise RuntimeError(f"DigitalPlat API returned an error: {message}")
+        if "code" in data and data["code"] not in (0, 200, "0", "200"):
+            message = data.get("message") or data.get("msg") or data
+            raise RuntimeError(f"DigitalPlat API returned code {data['code']}: {message}")
+        if "data" in data and data["data"] is not None:
+            return data["data"]
     return data
 
 
@@ -139,21 +142,38 @@ def optional_int_env(name: str, default: int) -> int:
 
 
 def parse_domain_variable() -> list[str]:
-    raw = require_env("DIGITALPLAT_DOMAINS")
-    normalized = raw.replace(",", "\n")
+    raw = os.getenv("DIGITALPLAT_DOMAINS")
+    if not raw:
+        return []
+    normalized = raw.replace(";", "\n").replace(",", "\n").replace(" ", "\n")
     domains = [line.strip().lower() for line in normalized.splitlines() if line.strip()]
-    if not domains:
-        raise RuntimeError("DIGITALPLAT_DOMAINS is empty.")
-    duplicates = sorted({domain for domain in domains if domains.count(domain) > 1})
+    seen: set[str] = set()
+    unique_domains: list[str] = []
+    duplicates: list[str] = []
+    for domain in domains:
+        if domain in seen:
+            duplicates.append(domain)
+        else:
+            seen.add(domain)
+            unique_domains.append(domain)
     if duplicates:
-        raise RuntimeError(f"DIGITALPLAT_DOMAINS contains duplicates: {', '.join(duplicates)}")
-    return domains
+        print(f"[WARN] DIGITALPLAT_DOMAINS contains duplicates ({', '.join(sorted(set(duplicates)))}). Automatically deduplicating.")
+    return unique_domains
 
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"domains": {}}
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    content = path.read_text(encoding="utf-8-sig").strip()
+    if not content:
+        return {"domains": {}}
+    try:
+        data = json.loads(content)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+    return {"domains": {}}
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
@@ -162,22 +182,51 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 
 def parse_datetime(value: Any) -> datetime:
-    if not value:
+    if value is None or value == "":
         raise ValueError("empty date")
+
+    # If it's already an int/float timestamp
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 1e11:  # milliseconds timestamp
+            ts /= 1000.0
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+
     text = str(value).strip()
-    if len(text) == 8 and text.isdigit():
-        return datetime.strptime(text, "%Y%m%d").replace(tzinfo=timezone.utc)
-    if len(text) == 10:
-        return datetime.strptime(text, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    if not text:
+        raise ValueError("empty date")
+
+    # Pure numeric strings: epoch seconds, ms, or YYYYMMDD
+    if text.isdigit():
+        if len(text) == 8:
+            return datetime.strptime(text, "%Y%m%d").replace(tzinfo=timezone.utc)
+        if len(text) in (10, 13):
+            ts = float(text)
+            if len(text) == 13:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+    # Standardize slash separators
+    text = text.replace("/", "-")
+
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
+
     try:
         parsed = datetime.fromisoformat(text)
-    except ValueError as exc:
-        raise ValueError(f"Unsupported date format: {value}") from exc
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        pass
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%m-%Y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+
+    raise ValueError(f"Unsupported date format: {value}")
 
 
 def pick_first(raw: dict[str, Any], keys: tuple[str, ...]) -> Any:
@@ -189,22 +238,38 @@ def pick_first(raw: dict[str, Any], keys: tuple[str, ...]) -> Any:
 
 
 def normalize_domain(raw: dict[str, Any]) -> DomainRecord:
-    name = pick_first(raw, ("domain", "name", "full_domain"))
+    name = pick_first(raw, ("domain", "name", "domain_name", "domainName", "full_domain", "fullDomain"))
     if not name:
         raise RuntimeError(f"Domain record is missing a domain name: {raw}")
-    expiry = pick_first(raw, ("expiry_date", "expires_at", "expiryDate", "expiresAt", "expiration_date"))
+    expiry = pick_first(
+        raw,
+        (
+            "expiry_date",
+            "expires_at",
+            "expiryDate",
+            "expiresAt",
+            "expiration_date",
+            "expirationDate",
+            "expire_at",
+            "expire_date",
+            "expires",
+            "expiration",
+            "expiry",
+        ),
+    )
     if not expiry:
         raise RuntimeError(f"Domain record is missing expiry_date: {raw}")
-    can_renew = pick_first(raw, ("can_free_renew", "can_renew", "renewable"))
+    can_renew = pick_first(raw, ("can_free_renew", "can_renew", "renewable", "is_renewable", "canRenew", "canFreeRenew"))
     if isinstance(can_renew, str):
         can_renew = can_renew.strip().lower() in ("1", "true", "yes", "y")
     elif can_renew is not None:
         can_renew = bool(can_renew)
+    status = pick_first(raw, ("status", "domain_status", "state"))
     return DomainRecord(
         name=str(name).strip().lower(),
         raw=raw,
         expiry_date=parse_datetime(expiry),
-        status=None if raw.get("status") is None else str(raw.get("status")),
+        status=None if status is None else str(status),
         can_renew=can_renew,
     )
 
@@ -256,6 +321,8 @@ def update_state_for_record(
 
 
 def remove_stale_domains(state: dict[str, Any], active_domains: set[str]) -> bool:
+    if not active_domains:
+        return False
     domains = state.setdefault("domains", {})
     stale = [domain for domain in domains if domain not in active_domains]
     for domain in stale:
@@ -275,12 +342,40 @@ def main() -> int:
     if args.fixture:
         raw_domains = load_fixture(Path(args.fixture))
     else:
-        token = require_env("DIGITALPLAT_API_TOKEN")
+        token = os.getenv("DIGITALPLAT_API_TOKEN")
+        if not token:
+            print("[FATAL] Missing required environment variable: DIGITALPLAT_API_TOKEN", file=sys.stderr)
+            print("Please configure DIGITALPLAT_API_TOKEN in GitHub repository Settings -> Secrets and variables -> Actions.", file=sys.stderr)
+            return 1
         api_base = os.getenv("DIGITALPLAT_API_BASE") or API_BASE
         client = DigitalPlatClient(token, api_base)
-        raw_domains = client.list_domains()
+        try:
+            raw_domains = client.list_domains()
+        except Exception as exc:
+            print(f"[WARN] Failed to list domains from API: {exc}")
+            raw_domains = []
 
-    domain_map = {normalize_domain(raw).name: raw for raw in raw_domains}
+    # Safe mapping from domain name to raw record (avoid crashing on pending/incomplete records)
+    domain_map: dict[str, dict[str, Any]] = {}
+    for raw in raw_domains:
+        if not isinstance(raw, dict):
+            continue
+        name = pick_first(raw, ("domain", "name", "domain_name", "domainName", "full_domain", "fullDomain"))
+        if name:
+            domain_map[str(name).strip().lower()] = raw
+
+    # If user did not specify DIGITALPLAT_DOMAINS, automatically manage all domains in account
+    if not managed_names:
+        if domain_map:
+            managed_names = list(domain_map.keys())
+            print(f"[INFO] DIGITALPLAT_DOMAINS not set. Automatically managing all {len(managed_names)} domain(s) in account: {', '.join(managed_names)}")
+        elif client is not None:
+            print("[INFO] No domains found in DigitalPlat account and DIGITALPLAT_DOMAINS is not set.")
+            return 0
+        else:
+            print("[FATAL] No domains provided and no domains found in fixture.", file=sys.stderr)
+            return 1
+
     state = load_state(state_path)
     state_changed = remove_stale_domains(state, set(managed_names))
     renewed_count = 0
@@ -301,6 +396,31 @@ def main() -> int:
             errors.append(f"{domain}: not found in DigitalPlat account")
             continue
 
+        # If expiry date is missing from summary list, fetch detail
+        expiry_val = pick_first(
+            raw,
+            (
+                "expiry_date",
+                "expires_at",
+                "expiryDate",
+                "expiresAt",
+                "expiration_date",
+                "expirationDate",
+                "expire_at",
+                "expire_date",
+                "expires",
+                "expiration",
+                "expiry",
+            ),
+        )
+        if not expiry_val and client is not None:
+            try:
+                detail = client.get_domain(domain)
+                if isinstance(detail, dict):
+                    raw = {**raw, **detail}
+            except Exception as exc:
+                print(f"[WARN] Failed to fetch additional detail for {domain}: {exc}")
+
         try:
             record = normalize_domain(raw)
         except Exception as exc:
@@ -313,7 +433,7 @@ def main() -> int:
         )
 
         if not should_renew(record, renew_before_days):
-            print(f"[SKIP] {record.name} has not entered the renewal window.")
+            print(f"[SKIP] {record.name} has not entered the renewal window ({record.days_remaining} days left, window is {renew_before_days} days).")
             state_changed = update_state_for_record(state, record, "skipped", renew_before_days) or state_changed
             continue
 
@@ -327,18 +447,41 @@ def main() -> int:
 
         try:
             renewed_raw = client.renew_domain(record.name, renewal_type, renewal_years)
-            renewed_record = normalize_domain(renewed_raw)
         except Exception as exc:
-            errors.append(f"{record.name}: renewal failed: {exc}")
+            errors.append(f"{record.name}: renewal request failed: {exc}")
             state_changed = update_state_for_record(state, record, "renew_failed", renew_before_days) or state_changed
             continue
 
+        # Process renewed record
+        renewed_record = None
+        if isinstance(renewed_raw, dict):
+            # If API wrapped in {"domain": {...}}
+            candidate = renewed_raw.get("domain", renewed_raw)
+            if isinstance(candidate, dict):
+                try:
+                    renewed_record = normalize_domain(candidate)
+                except Exception:
+                    renewed_record = None
+
+        # If renewal response didn't contain full domain object, re-fetch authoritative state
+        if renewed_record is None and client is not None:
+            try:
+                refreshed = client.get_domain(record.name)
+                renewed_record = normalize_domain(refreshed)
+            except Exception as exc:
+                print(f"[WARN] Could not re-fetch details after renewal for {record.name}: {exc}")
+
         renewed_count += 1
-        state_changed = update_state_for_record(state, renewed_record, "renewed", renew_before_days) or state_changed
-        print(
-            f"[RENEWED] {renewed_record.name} new_expiry_date={renewed_record.expiry_date.strftime(DATE_FORMAT)} "
-            f"days_remaining={renewed_record.days_remaining}"
-        )
+        final_record = renewed_record if renewed_record is not None else record
+        state_changed = update_state_for_record(state, final_record, "renewed", renew_before_days) or state_changed
+
+        if renewed_record is not None:
+            print(
+                f"[RENEWED] {renewed_record.name} new_expiry_date={renewed_record.expiry_date.strftime(DATE_FORMAT)} "
+                f"days_remaining={renewed_record.days_remaining}"
+            )
+        else:
+            print(f"[RENEWED] {record.name} renewal request acknowledged successfully.")
 
     if state_changed and not args.dry_run:
         save_state(state_path, state)
@@ -358,7 +501,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        sys.exit(main())
     except Exception as exc:
         print(f"[FATAL] {exc}", file=sys.stderr)
-        raise
+        sys.exit(1)

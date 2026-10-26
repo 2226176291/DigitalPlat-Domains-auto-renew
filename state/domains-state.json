@@ -2,19 +2,19 @@
   "domains": {
     "gxabc.dpdns.org": {
       "expiry_date": "2028-01-03",
-      "days_remaining": 441,
+      "days_remaining": 434,
       "renew_before_days": 120,
       "status": "ok",
       "last_action": "permanent",
-      "checked_at": "2026-10-19T12:56:02+00:00"
+      "checked_at": "2026-10-26T10:04:33+00:00"
     },
     "gxlb.dpdns.org": {
       "expiry_date": "2027-10-19",
-      "days_remaining": 365,
+      "days_remaining": 358,
       "renew_before_days": 120,
       "status": "ok",
       "last_action": "permanent",
-      "checked_at": "2026-10-19T12:56:02+00:00"
+      "checked_at": "2026-10-26T10:04:33+00:00"
     }
   }
 }
